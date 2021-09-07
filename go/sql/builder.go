@@ -351,16 +351,18 @@ func BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, tableName str
 	)
 	return result, explodedArgs, nil
 }
-
-func BuildUniqueKeyMinValuesPreparedQuery(databaseName, tableName string, uniqueKeyColumns *ColumnList) (string, error) {
-	return buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName, uniqueKeyColumns, "asc")
+  
+func BuildUniqueKeyMinValuesPreparedQuery(databaseName, tableName string, uniqueKeyColumns *ColumnList, whereStr string) (string, error) {
+	  
+	return buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName, uniqueKeyColumns, "asc", whereStr)
 }
-
-func BuildUniqueKeyMaxValuesPreparedQuery(databaseName, tableName string, uniqueKeyColumns *ColumnList) (string, error) {
-	return buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName, uniqueKeyColumns, "desc")
+  
+func BuildUniqueKeyMaxValuesPreparedQuery(databaseName, tableName string, uniqueKeyColumns *ColumnList, whereStr string) (string, error) {
+	  
+	return buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName, uniqueKeyColumns, "desc", whereStr)
 }
-
-func buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName string, uniqueKeyColumns *ColumnList, order string) (string, error) {
+  
+func buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName string, uniqueKeyColumns *ColumnList, order string, whereStr string) (string, error) {
 	if uniqueKeyColumns.Len() == 0 {
 		return "", fmt.Errorf("Got 0 columns in BuildUniqueKeyMinMaxValuesPreparedQuery")
 	}
@@ -377,15 +379,18 @@ func buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName string, uni
 			uniqueKeyColumnOrder[i] = fmt.Sprintf("%s %s", uniqueKeyColumnNames[i], order)
 		}
 	}
+	  
 	query := fmt.Sprintf(`
       select /* gh-ost %s.%s */ %s
 				from
 					%s.%s
+                where %s
 				order by
 					%s
 				limit 1
     `, databaseName, tableName, strings.Join(uniqueKeyColumnNames, ", "),
 		databaseName, tableName,
+		whereStr,
 		strings.Join(uniqueKeyColumnOrder, ", "),
 	)
 	return query, nil

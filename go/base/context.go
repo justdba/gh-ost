@@ -14,9 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
 	"github.com/satori/go.uuid"
-
 	"github.com/github/gh-ost/go/mysql"
 	"github.com/github/gh-ost/go/sql"
 	"github.com/openark/golib/log"
@@ -76,7 +74,7 @@ func NewThrottleCheckResult(throttle bool, reason string, reasonHint ThrottleRea
 // all components throughout the migration process.
 type MigrationContext struct {
 	Uuid string
-
+    WhereStr              string   	
 	DatabaseName          string
 	OriginalTableName     string
 	AlterStatement        string

@@ -1104,11 +1104,13 @@ func (this *Migrator) initiateApplier() error {
 		return err
 	}
 
-	if err := this.applier.AlterGhost(); err != nil {
-		this.migrationContext.Log.Errorf("Unable to ALTER ghost table, see further error details. Bailing out")
-		return err
-	}
-
+	if this.migrationContext.AlterStatement != "noop" { 
+		if err := this.applier.AlterGhost(); err != nil {
+			this.migrationContext.Log.Errorf("Unable to ALTER ghost table, see further error details. Bailing out")
+			return err
+		}
+	} 
+	
 	if this.migrationContext.OriginalTableAutoIncrement > 0 && !this.parser.IsAutoIncrementDefined() {
 		// Original table has AUTO_INCREMENT value and the -alter statement does not indicate any override,
 		// so we should copy AUTO_INCREMENT value onto our ghost table.
