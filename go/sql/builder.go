@@ -182,7 +182,8 @@ func BuildRangePreparedComparison(columns *ColumnList, args []interface{}, compa
 	return BuildRangeComparison(columns.Names(), values, args, comparisonSign)
 }
 
-func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName string, sharedColumns []string, mappedSharedColumns []string, uniqueKey string, uniqueKeyColumns *ColumnList, rangeStartValues, rangeEndValues []string, rangeStartArgs, rangeEndArgs []interface{}, includeRangeStartValues bool, transactionalTable bool) (result string, explodedArgs []interface{}, err error) {
+
+func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName string, sharedColumns []string, mappedSharedColumns []string, uniqueKey string, uniqueKeyColumns *ColumnList, rangeStartValues, rangeEndValues []string, rangeStartArgs, rangeEndArgs []interface{}, includeRangeStartValues bool, transactionalTable bool, alterStr string) (result string, explodedArgs []interface{}, err error) {
 	if len(sharedColumns) == 0 {
 		return "", explodedArgs, fmt.Errorf("Got 0 shared columns in BuildRangeInsertQuery")
 	}
@@ -221,21 +222,34 @@ func BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName strin
 	if transactionalTable {
 		transactionalClause = "lock in share mode"
 	}
-	result = fmt.Sprintf(`
+
+	if strings.Contains(strings.ToLower(alterStr), "unique") {
+		result = fmt.Sprintf(`
+      insert /* gh-ost %s.%s */ into %s.%s (%s)
+      (select %s from %s.%s force index (%s)
+        where (%s and %s) %s
+      )
+    `, databaseName, originalTableName, databaseName, ghostTableName, mappedSharedColumnsListing,
+			sharedColumnsListing, databaseName, originalTableName, uniqueKey,
+			rangeStartComparison, rangeEndComparison, transactionalClause)
+	} else {
+		result = fmt.Sprintf(`
       insert /* gh-ost %s.%s */ ignore into %s.%s (%s)
       (select %s from %s.%s force index (%s)
         where (%s and %s) %s
       )
     `, databaseName, originalTableName, databaseName, ghostTableName, mappedSharedColumnsListing,
-		sharedColumnsListing, databaseName, originalTableName, uniqueKey,
-		rangeStartComparison, rangeEndComparison, transactionalClause)
+			sharedColumnsListing, databaseName, originalTableName, uniqueKey,
+			rangeStartComparison, rangeEndComparison, transactionalClause)
+	}
 	return result, explodedArgs, nil
 }
 
-func BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableName string, sharedColumns []string, mappedSharedColumns []string, uniqueKey string, uniqueKeyColumns *ColumnList, rangeStartArgs, rangeEndArgs []interface{}, includeRangeStartValues bool, transactionalTable bool) (result string, explodedArgs []interface{}, err error) {
+
+func BuildRangeInsertPreparedQuery(databaseName, originalTableName, ghostTableName string, sharedColumns []string, mappedSharedColumns []string, uniqueKey string, uniqueKeyColumns *ColumnList, rangeStartArgs, rangeEndArgs []interface{}, includeRangeStartValues bool, transactionalTable bool, alterStr string) (result string, explodedArgs []interface{}, err error) {
 	rangeStartValues := buildColumnsPreparedValues(uniqueKeyColumns)
 	rangeEndValues := buildColumnsPreparedValues(uniqueKeyColumns)
-	return BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, mappedSharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, includeRangeStartValues, transactionalTable)
+	return BuildRangeInsertQuery(databaseName, originalTableName, ghostTableName, sharedColumns, mappedSharedColumns, uniqueKey, uniqueKeyColumns, rangeStartValues, rangeEndValues, rangeStartArgs, rangeEndArgs, includeRangeStartValues, transactionalTable, alterStr)
 }
 
 func BuildUniqueKeyRangeEndPreparedQueryViaOffset(databaseName, tableName string, uniqueKeyColumns *ColumnList, rangeStartArgs, rangeEndArgs []interface{}, chunkSize int64, includeRangeStartValues bool, hint string) (result string, explodedArgs []interface{}, err error) {
@@ -351,17 +365,18 @@ func BuildUniqueKeyRangeEndPreparedQueryViaTemptable(databaseName, tableName str
 	)
 	return result, explodedArgs, nil
 }
-  
+
+
 func BuildUniqueKeyMinValuesPreparedQuery(databaseName, tableName string, uniqueKeyColumns *ColumnList, whereStr string) (string, error) {
-	  
 	return buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName, uniqueKeyColumns, "asc", whereStr)
 }
-  
+
+
 func BuildUniqueKeyMaxValuesPreparedQuery(databaseName, tableName string, uniqueKeyColumns *ColumnList, whereStr string) (string, error) {
-	  
 	return buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName, uniqueKeyColumns, "desc", whereStr)
 }
-  
+
+
 func buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName string, uniqueKeyColumns *ColumnList, order string, whereStr string) (string, error) {
 	if uniqueKeyColumns.Len() == 0 {
 		return "", fmt.Errorf("Got 0 columns in BuildUniqueKeyMinMaxValuesPreparedQuery")
@@ -379,7 +394,6 @@ func buildUniqueKeyMinMaxValuesPreparedQuery(databaseName, tableName string, uni
 			uniqueKeyColumnOrder[i] = fmt.Sprintf("%s %s", uniqueKeyColumnNames[i], order)
 		}
 	}
-	  
 	query := fmt.Sprintf(`
       select /* gh-ost %s.%s */ %s
 				from
@@ -425,6 +439,88 @@ func BuildDMLDeleteQuery(databaseName, tableName string, tableColumns, uniqueKey
 		equalsComparison,
 	)
 	return result, uniqueKeyArgs, nil
+}
+
+
+func BuildDMLInsertQueryDel(databaseName, tableName string, tableColumns, sharedColumns, mappedSharedColumns *ColumnList, args []interface{}) (result string, sharedArgs []interface{}, err error) {
+	if len(args) != tableColumns.Len() {
+		return result, args, fmt.Errorf("args count differs from table column count in BuildDMLInsertQueryDel")
+	}
+	if !sharedColumns.IsSubsetOf(tableColumns) {
+		return result, args, fmt.Errorf("shared columns is not a subset of table columns in BuildDMLInsertQueryDel")
+	}
+	if sharedColumns.Len() == 0 {
+		return result, args, fmt.Errorf("No shared columns found in BuildDMLInsertQueryDel")
+	}
+	databaseName = EscapeName(databaseName)
+	tableName = EscapeName(tableName)
+
+	for _, column := range sharedColumns.Columns() {
+		tableOrdinal := tableColumns.Ordinals[column.Name]
+		arg := column.convertArg(args[tableOrdinal], false)
+		sharedArgs = append(sharedArgs, arg)
+	}
+
+	mappedSharedColumnNames := duplicateNames(mappedSharedColumns.Names())
+	for i := range mappedSharedColumnNames {
+		mappedSharedColumnNames[i] = EscapeName(mappedSharedColumnNames[i])
+	}
+	preparedValues := buildColumnsPreparedValues(mappedSharedColumns)
+
+	var whereString string
+	for i := range mappedSharedColumnNames {
+		whereString += fmt.Sprintf(" %s = %s and ", mappedSharedColumnNames[i], preparedValues[i])
+	}
+	result = fmt.Sprintf(`
+			delete /* gh-ost %s.%s */ from
+				%s.%s
+				where
+					(%s)
+		`, databaseName, tableName,
+		databaseName, tableName,
+		whereString[:len(whereString)-4],
+	)
+	return result, sharedArgs, nil
+}
+
+
+func BuildDMLInsertQueryIns(databaseName, tableName string, tableColumns, sharedColumns, mappedSharedColumns *ColumnList, args []interface{}) (result string, sharedArgs []interface{}, err error) {
+	if len(args) != tableColumns.Len() {
+		return result, args, fmt.Errorf("args count differs from table column count in BuildDMLInsertQueryIns")
+	}
+	if !sharedColumns.IsSubsetOf(tableColumns) {
+		return result, args, fmt.Errorf("shared columns is not a subset of table columns in BuildDMLInsertQueryIns")
+	}
+	if sharedColumns.Len() == 0 {
+		return result, args, fmt.Errorf("No shared columns found in BuildDMLInsertQueryIns")
+	}
+	databaseName = EscapeName(databaseName)
+	tableName = EscapeName(tableName)
+
+	for _, column := range sharedColumns.Columns() {
+		tableOrdinal := tableColumns.Ordinals[column.Name]
+		arg := column.convertArg(args[tableOrdinal], false)
+		sharedArgs = append(sharedArgs, arg)
+	}
+
+	mappedSharedColumnNames := duplicateNames(mappedSharedColumns.Names())
+	for i := range mappedSharedColumnNames {
+		mappedSharedColumnNames[i] = EscapeName(mappedSharedColumnNames[i])
+	}
+	preparedValues := buildColumnsPreparedValues(mappedSharedColumns)
+
+	result = fmt.Sprintf(`
+			insert /* gh-ost %s.%s */ into
+				%s.%s
+					(%s)
+				values
+					(%s)
+		`, databaseName, tableName,
+		databaseName, tableName,
+		strings.Join(mappedSharedColumnNames, ", "),
+		strings.Join(preparedValues, ", "),
+	)
+	return result, sharedArgs, nil
 }
 
 func BuildDMLInsertQuery(databaseName, tableName string, tableColumns, sharedColumns, mappedSharedColumns *ColumnList, args []interface{}) (result string, sharedArgs []interface{}, err error) {
